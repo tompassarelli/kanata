@@ -292,7 +292,7 @@ fn touchpad_monitor_loop(
         }
     }
     // Guarantee release if the thread exits while the touchpad was active.
-    if touchpad_in.is_touching {
+    if touchpad_in.is_active {
         log::warn!("touchpad monitor exiting while active, releasing virtual key");
         let mut k = kanata.lock();
         handle_fakekey_action(

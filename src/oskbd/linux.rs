@@ -838,14 +838,24 @@ impl Drop for Symlink {
     }
 }
 
-/// Monitors a touchpad device for finger contact state via BTN_TOOL_FINGER.
+/// Monitors a touchpad device for finger contact + motion.
 /// The device is opened without grabbing so normal touchpad behavior is preserved.
+///
+/// Detection algorithm (mirrors the standalone touch-layer project):
+///   1. BTN_TOOL_FINGER value=1 → finger is on pad, but do NOT activate yet
+///   2. ABS_X/ABS_Y change while finger is down → activate (real motion detected)
+///   3. BTN_TOOL_FINGER value=0 → deactivate
+///
+/// This avoids false activations from resting fingers or accidental brushes.
 pub struct TouchpadIn {
     device: Device,
     poll: Poll,
     events: Events,
-    /// Current contact state: true if a finger is on the pad.
-    pub is_touching: bool,
+    /// True when finger is physically on the pad (BTN_TOOL_FINGER).
+    finger_down: bool,
+    /// True when we've detected motion and activated the virtual key.
+    /// This is the externally visible "active" state.
+    pub is_active: bool,
 }
 
 const TOUCHPAD_TOKEN: Token = Token(0);
@@ -875,13 +885,14 @@ impl TouchpadIn {
             device,
             poll,
             events: Events::with_capacity(4),
-            is_touching: false,
+            finger_down: false,
+            is_active: false,
         })
     }
 
     /// Block until touchpad events arrive, then process them.
-    /// Returns Some(true) on touch-down transition,
-    /// Some(false) on touch-up transition, or None if no state change.
+    /// Returns Some(true) on activation (motion detected while finger down),
+    /// Some(false) on deactivation (finger lifted), or None if no state change.
     pub fn read_contact_change(&mut self) -> Result<Option<bool>, io::Error> {
         if let Err(e) = self.poll.poll(&mut self.events, None) {
             log::error!("touchpad poll error: {e:?}");
@@ -897,8 +908,9 @@ impl TouchpadIn {
             Err(e) => {
                 if e.raw_os_error() == Some(19) {
                     log::warn!("touchpad device disconnected");
-                    if self.is_touching {
-                        self.is_touching = false;
+                    if self.is_active {
+                        self.is_active = false;
+                        self.finger_down = false;
                         return Ok(Some(false));
                     }
                 }
@@ -906,15 +918,43 @@ impl TouchpadIn {
             }
         };
 
+        use evdev::AbsoluteAxisCode;
+
         let mut changed = None;
         for ev in evs {
-            // BTN_TOOL_FINGER is KeyCode(0x145 = 325)
-            if ev.event_type() == EventType::KEY && ev.code() == KeyCode::BTN_TOOL_FINGER.0 {
-                let touching = ev.value() != 0;
-                if touching != self.is_touching {
-                    self.is_touching = touching;
-                    changed = Some(touching);
+            match ev.event_type() {
+                EventType::KEY if ev.code() == KeyCode::BTN_TOOL_FINGER.0 => {
+                    if ev.value() != 0 {
+                        // Finger touched pad — just record it, don't activate yet.
+                        self.finger_down = true;
+                        log::trace!("touchpad: finger down (waiting for motion)");
+                    } else {
+                        // Finger lifted — deactivate if we were active.
+                        self.finger_down = false;
+                        if self.is_active {
+                            self.is_active = false;
+                            changed = Some(false);
+                            log::trace!("touchpad: finger up, deactivating");
+                        }
+                    }
                 }
+                EventType::ABSOLUTE
+                    if self.finger_down
+                        && !self.is_active
+                        && matches!(
+                            AbsoluteAxisCode(ev.code()),
+                            AbsoluteAxisCode::ABS_X
+                                | AbsoluteAxisCode::ABS_Y
+                                | AbsoluteAxisCode::ABS_MT_POSITION_X
+                                | AbsoluteAxisCode::ABS_MT_POSITION_Y
+                        ) =>
+                {
+                    // Motion detected while finger is down — activate.
+                    self.is_active = true;
+                    changed = Some(true);
+                    log::trace!("touchpad: motion detected, activating");
+                }
+                _ => {}
             }
         }
         Ok(changed)
