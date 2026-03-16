@@ -269,8 +269,6 @@ pub struct Kanata {
     #[cfg(target_os = "linux")]
     pub touchpad_virtual_key: Option<String>,
     #[cfg(target_os = "linux")]
-    pub touchpad_poll_interval_ms: u16,
-    #[cfg(target_os = "linux")]
     pub touchpad_motion_threshold: u16,
     #[cfg(target_os = "linux")]
     pub touchpad_activation_window_ms: u16,
@@ -541,8 +539,6 @@ impl Kanata {
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             #[cfg(target_os = "linux")]
-            touchpad_poll_interval_ms: cfg.options.linux_opts.linux_touchpad_poll_interval_ms,
-            #[cfg(target_os = "linux")]
             touchpad_motion_threshold: cfg.options.linux_opts.linux_touchpad_motion_threshold,
             #[cfg(target_os = "linux")]
             touchpad_activation_window_ms: cfg.options.linux_opts.linux_touchpad_activation_window_ms,
@@ -702,8 +698,6 @@ impl Kanata {
             touchpad_dev_path: cfg.options.linux_opts.linux_touchpad_dev.clone(),
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
-            #[cfg(target_os = "linux")]
-            touchpad_poll_interval_ms: cfg.options.linux_opts.linux_touchpad_poll_interval_ms,
             #[cfg(target_os = "linux")]
             touchpad_motion_threshold: cfg.options.linux_opts.linux_touchpad_motion_threshold,
             #[cfg(target_os = "linux")]

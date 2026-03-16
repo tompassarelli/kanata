@@ -50,7 +50,6 @@ impl Kanata {
                 }
             };
             let tp_cfg = crate::oskbd::TouchpadConfig {
-                poll_interval_ms: k.touchpad_poll_interval_ms,
                 motion_threshold: k.touchpad_motion_threshold,
                 activation_window_ms: k.touchpad_activation_window_ms,
                 activation_ratio: k.touchpad_activation_ratio,

@@ -840,11 +840,10 @@ impl Drop for Symlink {
 
 /// Configuration for touchpad motion detection.
 pub struct TouchpadConfig {
-    /// Milliseconds between position samples.
-    pub poll_interval_ms: u16,
-    /// Minimum displacement (abs units) at a poll to count as motion.
+    /// Minimum per-axis displacement in device-native absolute units between
+    /// consecutive evdev reports for a sample to count as "moving".
     pub motion_threshold: u16,
-    /// Rolling time window for evaluating motion ratio.
+    /// Rolling time window in milliseconds for evaluating motion ratio.
     pub activation_window_ms: u16,
     /// Required percentage (0-100) of motion-positive samples in the window.
     pub activation_ratio: u16,
@@ -854,12 +853,17 @@ pub struct TouchpadConfig {
 /// The device is opened without grabbing so normal touchpad behavior is preserved.
 ///
 /// Detection algorithm:
-///   1. BTN_TOOL_FINGER value=1 → finger is on pad, start sampling position
-///   2. Every poll_interval_ms, sample position. If displacement from last
-///      sample >= motion_threshold, record a motion-positive sample.
-///   3. Maintain a rolling window of activation_window_ms. If the fraction
-///      of motion-positive samples >= activation_ratio, activate.
+///   1. BTN_TOOL_FINGER value=1 → finger is on pad, start tracking
+///   2. On each evdev event batch, compare position to previous batch.
+///      If displacement >= motion_threshold, record a timestamped
+///      motion-positive sample; otherwise record motion-negative.
+///   3. Evaluate all samples within the last activation_window_ms.
+///      If motion-positive samples >= activation_ratio%, activate.
 ///   4. BTN_TOOL_FINGER value=0 → deactivate.
+///
+/// Sampling is driven by the touchpad's native report rate (~7ms / 143Hz
+/// on typical hardware). No configurable poll interval — the hardware
+/// determines the cadence.
 pub struct TouchpadIn {
     device: Device,
     poll: Poll,
@@ -871,13 +875,8 @@ pub struct TouchpadIn {
     pub is_active: bool,
     /// Last sampled finger position.
     last_pos: Option<(i32, i32)>,
-    /// Rolling window of recent sample results. true = motion, false = still.
-    /// Oldest samples are at the front.
-    samples: std::collections::VecDeque<bool>,
-    /// Number of samples needed to fill the activation window.
-    window_size: usize,
-    /// Time of last sample, used to enforce poll_interval_ms cadence.
-    last_sample_time: Option<std::time::Instant>,
+    /// Timestamped sample results. (time, is_motion).
+    samples: std::collections::VecDeque<(std::time::Instant, bool)>,
 }
 
 const TOUCHPAD_TOKEN: Token = Token(0);
@@ -903,17 +902,9 @@ impl TouchpadIn {
             Interest::READABLE,
         )?;
 
-        // How many samples fit in the window.
-        let window_size = if cfg.poll_interval_ms > 0 {
-            (cfg.activation_window_ms / cfg.poll_interval_ms).max(1) as usize
-        } else {
-            1
-        };
-
         log::info!(
-            "touchpad config: poll={}ms threshold={} window={}ms ratio={}% (window_size={})",
-            cfg.poll_interval_ms, cfg.motion_threshold,
-            cfg.activation_window_ms, cfg.activation_ratio, window_size,
+            "touchpad config: threshold={} window={}ms ratio={}%",
+            cfg.motion_threshold, cfg.activation_window_ms, cfg.activation_ratio,
         );
 
         Ok(Self {
@@ -924,56 +915,58 @@ impl TouchpadIn {
             finger_down: false,
             is_active: false,
             last_pos: None,
-            samples: std::collections::VecDeque::with_capacity(window_size + 1),
-            window_size,
-            last_sample_time: None,
+            samples: std::collections::VecDeque::with_capacity(64),
         })
     }
 
     fn reset(&mut self) {
         self.last_pos = None;
         self.samples.clear();
-        self.last_sample_time = None;
     }
 
-    /// Check if motion-positive samples meet the activation ratio.
-    fn check_activation(&self) -> bool {
-        if self.samples.len() < self.window_size {
+    /// Evict samples older than the activation window, then check ratio.
+    fn check_activation(&mut self, now: std::time::Instant) -> bool {
+        let window = std::time::Duration::from_millis(self.cfg.activation_window_ms.into());
+        let cutoff = now.checked_sub(window).unwrap_or(now);
+
+        // Evict old samples.
+        while self.samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            self.samples.pop_front();
+        }
+
+        if self.samples.is_empty() {
             return false;
         }
-        let motion_count = self.samples.iter().filter(|&&s| s).count();
-        let ratio = (motion_count * 100) / self.samples.len();
+
+        // Check that samples span at least the full window duration.
+        let oldest = self.samples.front().unwrap().0;
+        if now.duration_since(oldest) < window {
+            return false;
+        }
+
+        let total = self.samples.len();
+        let motion_count = self.samples.iter().filter(|(_, m)| *m).count();
+        let ratio = (motion_count * 100) / total;
         ratio >= self.cfg.activation_ratio as usize
     }
 
     /// Block until touchpad events arrive, then process them.
     /// Returns Some(true) on activation, Some(false) on deactivation, or None.
     pub fn read_contact_change(&mut self) -> Result<Option<bool>, io::Error> {
-        // Use poll_interval_ms as timeout so we sample at the right cadence
-        // even when evdev events arrive faster or slower.
-        let timeout = if self.finger_down && !self.is_active {
-            Some(std::time::Duration::from_millis(
-                self.cfg.poll_interval_ms.into(),
-            ))
-        } else {
-            None // block indefinitely when idle or already active
-        };
-
-        if let Err(e) = self.poll.poll(&mut self.events, timeout) {
+        if let Err(e) = self.poll.poll(&mut self.events, None) {
             log::error!("touchpad poll error: {e:?}");
             return Ok(None);
         }
 
-        // Even if no events, we might need to record a "no motion" sample
-        // if the finger is down and enough time has passed.
-        let fetch_result = if !self.events.is_empty() {
-            Some(self.device.fetch_events().map(|evs| evs.collect::<Vec<_>>()))
-        } else {
-            None
-        };
+        if self.events.is_empty() {
+            return Ok(None);
+        }
+
+        let fetch_result =
+            self.device.fetch_events().map(|evs| evs.collect::<Vec<_>>());
         let evs: Vec<_> = match fetch_result {
-            Some(Ok(evs)) => evs,
-            Some(Err(e)) => {
+            Ok(evs) => evs,
+            Err(e) => {
                 if e.raw_os_error() == Some(19) {
                     log::warn!("touchpad device disconnected");
                     if self.is_active {
@@ -985,7 +978,6 @@ impl TouchpadIn {
                 }
                 return Err(e);
             }
-            None => vec![],
         };
 
         use evdev::AbsoluteAxisCode;
@@ -1026,57 +1018,40 @@ impl TouchpadIn {
             }
         }
 
-        // Sample position at poll cadence.
-        if self.finger_down && !self.is_active {
+        // Record a sample on every event batch that has position data.
+        if self.finger_down && !self.is_active && (cur_x.is_some() || cur_y.is_some()) {
             let now = std::time::Instant::now();
-            let should_sample = match self.last_sample_time {
-                None => true,
-                Some(t) => now.duration_since(t).as_millis()
-                    >= u128::from(self.cfg.poll_interval_ms),
+
+            let is_motion = match self.last_pos {
+                None => false, // first report, just record position
+                Some((lx, ly)) => {
+                    let nx = cur_x.unwrap_or(lx);
+                    let ny = cur_y.unwrap_or(ly);
+                    let dx = (nx - lx).abs();
+                    let dy = (ny - ly).abs();
+                    dx >= i32::from(self.cfg.motion_threshold)
+                        || dy >= i32::from(self.cfg.motion_threshold)
+                }
             };
 
-            if should_sample {
-                let is_motion = match self.last_pos {
-                    None => {
-                        // First sample — just record position, not motion.
-                        false
-                    }
-                    Some((lx, ly)) => {
-                        let nx = cur_x.unwrap_or(lx);
-                        let ny = cur_y.unwrap_or(ly);
-                        let dx = (nx - lx).abs();
-                        let dy = (ny - ly).abs();
-                        dx >= i32::from(self.cfg.motion_threshold)
-                            || dy >= i32::from(self.cfg.motion_threshold)
-                    }
-                };
+            // Update position.
+            if let Some((lx, ly)) = self.last_pos {
+                self.last_pos = Some((cur_x.unwrap_or(lx), cur_y.unwrap_or(ly)));
+            } else {
+                self.last_pos = Some((cur_x.unwrap_or(0), cur_y.unwrap_or(0)));
+            }
 
-                // Update position from this batch.
-                if let Some((lx, ly)) = self.last_pos {
-                    self.last_pos = Some((cur_x.unwrap_or(lx), cur_y.unwrap_or(ly)));
-                } else {
-                    self.last_pos = Some((cur_x.unwrap_or(0), cur_y.unwrap_or(0)));
-                }
+            self.samples.push_back((now, is_motion));
 
-                // Record sample and trim window.
-                self.samples.push_back(is_motion);
-                while self.samples.len() > self.window_size {
-                    self.samples.pop_front();
-                }
-                self.last_sample_time = Some(now);
+            log::trace!(
+                "touchpad: sample={} total_samples={}",
+                is_motion, self.samples.len(),
+            );
 
-                log::trace!(
-                    "touchpad: sample={} window={}/{} ({} motion)",
-                    is_motion, self.samples.len(), self.window_size,
-                    self.samples.iter().filter(|&&s| s).count(),
-                );
-
-                // Check activation.
-                if self.check_activation() {
-                    self.is_active = true;
-                    changed = Some(true);
-                    log::trace!("touchpad: activation ratio met, activating");
-                }
+            if self.check_activation(now) {
+                self.is_active = true;
+                changed = Some(true);
+                log::trace!("touchpad: activation ratio met, activating");
             }
         }
 
