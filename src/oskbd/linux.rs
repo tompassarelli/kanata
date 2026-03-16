@@ -838,41 +838,43 @@ impl Drop for Symlink {
     }
 }
 
-/// Monitors a touchpad device for finger contact + motion.
+/// Monitors a touchpad device for finger contact + sustained motion.
 /// The device is opened without grabbing so normal touchpad behavior is preserved.
 ///
-/// Detection algorithm (mirrors the standalone touch-layer project):
-///   1. BTN_TOOL_FINGER value=1 → finger is on pad, record initial position
-///   2. ABS_X/ABS_Y moves beyond a threshold from initial position → activate
-///   3. BTN_TOOL_FINGER value=0 → deactivate
+/// Detection algorithm:
+///   1. BTN_TOOL_FINGER value=1 → finger is on pad, start tracking position
+///   2. Each event batch: compute displacement from previous position.
+///      If displacement >= min_displacement, the tick counts as "moving".
+///      If not, the motion streak resets.
+///   3. Once the finger has been continuously moving for activation_time_ms,
+///      activate the virtual key.
+///   4. BTN_TOOL_FINGER value=0 → deactivate.
 ///
-/// This avoids false activations from resting fingers or accidental brushes.
-/// Raw ABS events fire on first contact (reporting position), so we require
-/// actual displacement from the landing point before activating.
+/// This avoids false activations from resting fingers, accidental brushes,
+/// or brief incidental contact.
 pub struct TouchpadIn {
     device: Device,
     poll: Poll,
     events: Events,
     /// True when finger is physically on the pad (BTN_TOOL_FINGER).
     finger_down: bool,
-    /// True when we've detected sufficient motion and activated the virtual key.
+    /// True when sustained motion has been confirmed and the virtual key is active.
     pub is_active: bool,
-    /// Initial finger position when BTN_TOOL_FINGER fires.
-    /// None until the first ABS_X/ABS_Y event after finger-down.
-    anchor: Option<(i32, i32)>,
-    /// Minimum displacement (in abs units) from landing position before activating.
-    threshold: i32,
-    /// Milliseconds of sustained motion required before activation (0 = instant).
+    /// Last known finger position. Updated each event batch.
+    last_pos: Option<(i32, i32)>,
+    /// Minimum displacement (in abs units) per event batch to count as "moving".
+    min_displacement: i32,
+    /// Milliseconds of continuous motion required before activation.
     activation_time_ms: u16,
-    /// When displacement threshold was first exceeded. Used with activation_time_ms
-    /// to require sustained motion before activating.
-    motion_start: Option<std::time::Instant>,
+    /// When the current unbroken motion streak began. Reset if any batch
+    /// fails the displacement check.
+    motion_streak_start: Option<std::time::Instant>,
 }
 
 const TOUCHPAD_TOKEN: Token = Token(0);
 
 impl TouchpadIn {
-    pub fn new(dev_path: &str, threshold: u16, activation_time_ms: u16) -> Result<Self, io::Error> {
+    pub fn new(dev_path: &str, min_displacement: u16, activation_time_ms: u16) -> Result<Self, io::Error> {
         let device = Device::open(dev_path).map_err(|e| {
             io::Error::new(
                 e.kind(),
@@ -898,16 +900,15 @@ impl TouchpadIn {
             events: Events::with_capacity(4),
             finger_down: false,
             is_active: false,
-            anchor: None,
-            threshold: i32::from(threshold),
+            last_pos: None,
+            min_displacement: i32::from(min_displacement),
             activation_time_ms,
-            motion_start: None,
+            motion_streak_start: None,
         })
     }
 
     /// Block until touchpad events arrive, then process them.
-    /// Returns Some(true) on activation (motion detected while finger down),
-    /// Some(false) on deactivation (finger lifted), or None if no state change.
+    /// Returns Some(true) on activation, Some(false) on deactivation, or None.
     pub fn read_contact_change(&mut self) -> Result<Option<bool>, io::Error> {
         if let Err(e) = self.poll.poll(&mut self.events, None) {
             log::error!("touchpad poll error: {e:?}");
@@ -926,7 +927,8 @@ impl TouchpadIn {
                     if self.is_active {
                         self.is_active = false;
                         self.finger_down = false;
-                        self.anchor = None;
+                        self.last_pos = None;
+                        self.motion_streak_start = None;
                         return Ok(Some(false));
                     }
                 }
@@ -936,8 +938,6 @@ impl TouchpadIn {
 
         use evdev::AbsoluteAxisCode;
 
-        // Track latest x/y from this batch of events so we can update anchor
-        // and check displacement.
         let mut cur_x: Option<i32> = None;
         let mut cur_y: Option<i32> = None;
         let mut changed = None;
@@ -946,16 +946,14 @@ impl TouchpadIn {
             match ev.event_type() {
                 EventType::KEY if ev.code() == KeyCode::BTN_TOOL_FINGER.0 => {
                     if ev.value() != 0 {
-                        // Finger touched pad — reset state, wait for position events.
                         self.finger_down = true;
-                        self.anchor = None;
-                        self.motion_start = None;
-                        log::trace!("touchpad: finger down (waiting for motion)");
+                        self.last_pos = None;
+                        self.motion_streak_start = None;
+                        log::trace!("touchpad: finger down");
                     } else {
-                        // Finger lifted — deactivate if we were active.
                         self.finger_down = false;
-                        self.anchor = None;
-                        self.motion_start = None;
+                        self.last_pos = None;
+                        self.motion_streak_start = None;
                         if self.is_active {
                             self.is_active = false;
                             changed = Some(false);
@@ -978,56 +976,47 @@ impl TouchpadIn {
             }
         }
 
-        // Process position updates after all events in the batch.
+        // Process position: compare against last known position.
         if self.finger_down && !self.is_active && (cur_x.is_some() || cur_y.is_some()) {
-            match self.anchor {
+            match self.last_pos {
                 None => {
-                    // First position report after finger-down — set anchor.
-                    // Use current values, falling back to 0 for any axis not yet reported.
-                    self.anchor = Some((cur_x.unwrap_or(0), cur_y.unwrap_or(0)));
-                    log::trace!("touchpad: anchor set at {:?}", self.anchor);
+                    // First position report — just record it, no displacement yet.
+                    self.last_pos = Some((cur_x.unwrap_or(0), cur_y.unwrap_or(0)));
+                    log::trace!("touchpad: initial position {:?}", self.last_pos);
                 }
-                Some((ax, ay)) => {
-                    // Check displacement from anchor.
-                    let dx = cur_x.map_or(0, |x| (x - ax).abs());
-                    let dy = cur_y.map_or(0, |y| (y - ay).abs());
-                    if dx > self.threshold || dy > self.threshold {
+                Some((lx, ly)) => {
+                    let nx = cur_x.unwrap_or(lx);
+                    let ny = cur_y.unwrap_or(ly);
+                    let dx = (nx - lx).abs();
+                    let dy = (ny - ly).abs();
+                    self.last_pos = Some((nx, ny));
+
+                    if dx >= self.min_displacement || dy >= self.min_displacement {
+                        // This batch counts as moving.
+                        let now = std::time::Instant::now();
+                        if self.motion_streak_start.is_none() {
+                            self.motion_streak_start = Some(now);
+                            log::trace!("touchpad: motion streak started (dx={dx}, dy={dy})");
+                        }
+
                         if self.activation_time_ms == 0 {
-                            // Instant activation — no sustained motion required.
                             self.is_active = true;
                             changed = Some(true);
-                            log::trace!(
-                                "touchpad: motion detected (dx={dx}, dy={dy}), activating"
-                            );
-                        } else {
-                            // Sustained motion — start or check timer.
-                            let now = std::time::Instant::now();
-                            match self.motion_start {
-                                None => {
-                                    self.motion_start = Some(now);
-                                    log::trace!(
-                                        "touchpad: motion started (dx={dx}, dy={dy}), waiting {}ms",
-                                        self.activation_time_ms
-                                    );
-                                }
-                                Some(start) => {
-                                    if now.duration_since(start).as_millis()
-                                        >= u128::from(self.activation_time_ms)
-                                    {
-                                        self.is_active = true;
-                                        changed = Some(true);
-                                        log::trace!(
-                                            "touchpad: sustained motion confirmed, activating"
-                                        );
-                                    }
-                                }
+                            log::trace!("touchpad: activating (instant mode)");
+                        } else if let Some(start) = self.motion_streak_start {
+                            if now.duration_since(start).as_millis()
+                                >= u128::from(self.activation_time_ms)
+                            {
+                                self.is_active = true;
+                                changed = Some(true);
+                                log::trace!("touchpad: sustained motion confirmed, activating");
                             }
                         }
                     } else {
-                        // Finger moved back within threshold — reset timer.
-                        if self.motion_start.is_some() {
-                            self.motion_start = None;
-                            log::trace!("touchpad: motion fell below threshold, resetting timer");
+                        // Not enough displacement this batch — break the streak.
+                        if self.motion_streak_start.is_some() {
+                            self.motion_streak_start = None;
+                            log::trace!("touchpad: motion streak broken (dx={dx}, dy={dy})");
                         }
                     }
                 }

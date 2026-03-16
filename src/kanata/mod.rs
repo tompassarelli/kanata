@@ -268,9 +268,9 @@ pub struct Kanata {
     /// Name of the virtual key to press/release on touchpad contact.
     #[cfg(target_os = "linux")]
     pub touchpad_virtual_key: Option<String>,
-    /// Motion threshold (in abs units) before touchpad activates.
+    /// Minimum displacement per event batch (abs units) to count as moving.
     #[cfg(target_os = "linux")]
-    pub touchpad_threshold: u16,
+    pub touchpad_min_displacement_since_last_poll: u16,
     /// Milliseconds of sustained motion required before activation (0 = instant).
     #[cfg(target_os = "linux")]
     pub touchpad_activation_time: u16,
@@ -539,7 +539,7 @@ impl Kanata {
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             #[cfg(target_os = "linux")]
-            touchpad_threshold: cfg.options.linux_opts.linux_touchpad_threshold,
+            touchpad_min_displacement_since_last_poll: cfg.options.linux_opts.linux_touchpad_min_displacement_since_last_poll,
             #[cfg(target_os = "linux")]
             touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
             waiting_for_idle: HashSet::default(),
@@ -697,7 +697,7 @@ impl Kanata {
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             #[cfg(target_os = "linux")]
-            touchpad_threshold: cfg.options.linux_opts.linux_touchpad_threshold,
+            touchpad_min_displacement_since_last_poll: cfg.options.linux_opts.linux_touchpad_min_displacement_since_last_poll,
             #[cfg(target_os = "linux")]
             touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
             waiting_for_idle: HashSet::default(),

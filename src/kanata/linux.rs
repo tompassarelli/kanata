@@ -49,7 +49,7 @@ impl Kanata {
                     );
                 }
             };
-            let tp_threshold = k.touchpad_threshold;
+            let tp_threshold = k.touchpad_min_displacement_since_last_poll;
             let tp_activation_time = k.touchpad_activation_time;
             let mut touchpad_in = match crate::oskbd::TouchpadIn::new(tp_dev, tp_threshold, tp_activation_time) {
                 Ok(tp) => tp,

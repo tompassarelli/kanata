@@ -37,7 +37,7 @@ pub struct CfgLinuxOptions {
     pub linux_device_detect_mode: Option<DeviceDetectMode>,
     pub linux_touchpad_dev: Option<String>,
     pub linux_touchpad_virtual_key: Option<String>,
-    pub linux_touchpad_threshold: u16,
+    pub linux_touchpad_min_displacement_since_last_poll: u16,
     pub linux_touchpad_activation_time: u16,
 }
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
@@ -59,8 +59,8 @@ impl Default for CfgLinuxOptions {
             linux_device_detect_mode: None,
             linux_touchpad_dev: None,
             linux_touchpad_virtual_key: None,
-            linux_touchpad_threshold: 50,
-            linux_touchpad_activation_time: 0,
+            linux_touchpad_min_displacement_since_last_poll: 50,
+            linux_touchpad_activation_time: 300,
         }
     }
 }
@@ -500,10 +500,10 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                             cfg.linux_opts.linux_touchpad_virtual_key = Some(vk_name.to_string());
                         }
                     }
-                    "linux-touchpad-threshold" => {
+                    "linux-touchpad-min-displacement-since-last-poll" => {
                         #[cfg(any(target_os = "linux", target_os = "unknown"))]
                         {
-                            cfg.linux_opts.linux_touchpad_threshold =
+                            cfg.linux_opts.linux_touchpad_min_displacement_since_last_poll =
                                 parse_cfg_val_u16(val, label, true)?;
                         }
                     }
