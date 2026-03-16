@@ -929,18 +929,21 @@ impl TouchpadIn {
         let window = std::time::Duration::from_millis(self.cfg.activation_window_ms.into());
         let cutoff = now.checked_sub(window).unwrap_or(now);
 
-        // Evict old samples.
+        // Evict samples strictly older than the window.
         while self.samples.front().is_some_and(|(t, _)| *t < cutoff) {
             self.samples.pop_front();
         }
 
-        if self.samples.is_empty() {
+        // Need at least 2 samples and the oldest must be near the window edge
+        // (within one report interval of the cutoff) to confirm we've been
+        // tracking for the full window duration.
+        if self.samples.len() < 2 {
             return false;
         }
 
-        // Check that samples span at least the full window duration.
         let oldest = self.samples.front().unwrap().0;
-        if now.duration_since(oldest) < window {
+        let margin = std::time::Duration::from_millis(20); // ~2-3 report intervals
+        if now.duration_since(oldest) + margin < window {
             return false;
         }
 
