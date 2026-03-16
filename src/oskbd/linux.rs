@@ -1027,10 +1027,12 @@ impl TouchpadIn {
                 Some((lx, ly)) => {
                     let nx = cur_x.unwrap_or(lx);
                     let ny = cur_y.unwrap_or(ly);
-                    let dx = (nx - lx).abs();
-                    let dy = (ny - ly).abs();
-                    dx >= i32::from(self.cfg.motion_threshold)
-                        || dy >= i32::from(self.cfg.motion_threshold)
+                    let dx = nx - lx;
+                    let dy = ny - ly;
+                    // Euclidean distance, squared to avoid sqrt.
+                    let dist_sq = dx * dx + dy * dy;
+                    let thresh = i32::from(self.cfg.motion_threshold);
+                    dist_sq >= thresh * thresh
                 }
             };
 
