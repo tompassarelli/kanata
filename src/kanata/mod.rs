@@ -268,12 +268,14 @@ pub struct Kanata {
     /// Name of the virtual key to press/release on touchpad contact.
     #[cfg(target_os = "linux")]
     pub touchpad_virtual_key: Option<String>,
-    /// Minimum displacement per event batch (abs units) to count as moving.
     #[cfg(target_os = "linux")]
-    pub touchpad_min_displacement_since_last_poll: u16,
-    /// Milliseconds of sustained motion required before activation (0 = instant).
+    pub touchpad_poll_interval_ms: u16,
     #[cfg(target_os = "linux")]
-    pub touchpad_activation_time: u16,
+    pub touchpad_motion_threshold: u16,
+    #[cfg(target_os = "linux")]
+    pub touchpad_activation_window_ms: u16,
+    #[cfg(target_os = "linux")]
+    pub touchpad_activation_ratio: u16,
     /// Fake key actions that are waiting for a certain duration of kanata idling.
     pub waiting_for_idle: HashSet<FakeKeyOnIdle>,
     /// Fake key actions that are waiting for a certain duration of physical keyboard idling,
@@ -539,9 +541,13 @@ impl Kanata {
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             #[cfg(target_os = "linux")]
-            touchpad_min_displacement_since_last_poll: cfg.options.linux_opts.linux_touchpad_min_displacement_since_last_poll,
+            touchpad_poll_interval_ms: cfg.options.linux_opts.linux_touchpad_poll_interval_ms,
             #[cfg(target_os = "linux")]
-            touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
+            touchpad_motion_threshold: cfg.options.linux_opts.linux_touchpad_motion_threshold,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_window_ms: cfg.options.linux_opts.linux_touchpad_activation_window_ms,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_ratio: cfg.options.linux_opts.linux_touchpad_activation_ratio,
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),
@@ -697,9 +703,13 @@ impl Kanata {
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             #[cfg(target_os = "linux")]
-            touchpad_min_displacement_since_last_poll: cfg.options.linux_opts.linux_touchpad_min_displacement_since_last_poll,
+            touchpad_poll_interval_ms: cfg.options.linux_opts.linux_touchpad_poll_interval_ms,
             #[cfg(target_os = "linux")]
-            touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
+            touchpad_motion_threshold: cfg.options.linux_opts.linux_touchpad_motion_threshold,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_window_ms: cfg.options.linux_opts.linux_touchpad_activation_window_ms,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_ratio: cfg.options.linux_opts.linux_touchpad_activation_ratio,
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),

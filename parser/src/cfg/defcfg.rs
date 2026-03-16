@@ -37,8 +37,14 @@ pub struct CfgLinuxOptions {
     pub linux_device_detect_mode: Option<DeviceDetectMode>,
     pub linux_touchpad_dev: Option<String>,
     pub linux_touchpad_virtual_key: Option<String>,
-    pub linux_touchpad_min_displacement_since_last_poll: u16,
-    pub linux_touchpad_activation_time: u16,
+    pub linux_touchpad_poll_interval_ms: u16,
+    /// Minimum per-axis displacement in device-native absolute units between
+    /// consecutive samples for a sample to count as "moving". Touchpad abs
+    /// ranges are typically 0-1200+; a value of 50 filters jitter.
+    pub linux_touchpad_motion_threshold: u16,
+    pub linux_touchpad_activation_window_ms: u16,
+    /// Required percentage of motion-positive samples in the window (0-100).
+    pub linux_touchpad_activation_ratio: u16,
 }
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
 impl Default for CfgLinuxOptions {
@@ -59,8 +65,10 @@ impl Default for CfgLinuxOptions {
             linux_device_detect_mode: None,
             linux_touchpad_dev: None,
             linux_touchpad_virtual_key: None,
-            linux_touchpad_min_displacement_since_last_poll: 50,
-            linux_touchpad_activation_time: 300,
+            linux_touchpad_poll_interval_ms: 5,
+            linux_touchpad_motion_threshold: 50,
+            linux_touchpad_activation_window_ms: 200,
+            linux_touchpad_activation_ratio: 90,
         }
     }
 }
@@ -259,6 +267,16 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                         bail!(
                             "linux-touchpad-dev and linux-touchpad-virtual-key must both be set or both be omitted"
                         );
+                    }
+                    if has_dev {
+                        let opts = &cfg.linux_opts;
+                        if opts.linux_touchpad_activation_window_ms < opts.linux_touchpad_poll_interval_ms {
+                            bail!(
+                                "linux-touchpad-activation-window-ms ({}) must be >= linux-touchpad-poll-interval-ms ({})",
+                                opts.linux_touchpad_activation_window_ms,
+                                opts.linux_touchpad_poll_interval_ms,
+                            );
+                        }
                     }
                 }
                 return Ok(cfg);
@@ -500,18 +518,35 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                             cfg.linux_opts.linux_touchpad_virtual_key = Some(vk_name.to_string());
                         }
                     }
-                    "linux-touchpad-min-displacement-since-last-poll" => {
+                    "linux-touchpad-poll-interval-ms" => {
                         #[cfg(any(target_os = "linux", target_os = "unknown"))]
                         {
-                            cfg.linux_opts.linux_touchpad_min_displacement_since_last_poll =
+                            cfg.linux_opts.linux_touchpad_poll_interval_ms =
                                 parse_cfg_val_u16(val, label, true)?;
                         }
                     }
-                    "linux-touchpad-activation-time" => {
+                    "linux-touchpad-motion-threshold" => {
                         #[cfg(any(target_os = "linux", target_os = "unknown"))]
                         {
-                            cfg.linux_opts.linux_touchpad_activation_time =
-                                parse_cfg_val_u16(val, label, false)?;
+                            cfg.linux_opts.linux_touchpad_motion_threshold =
+                                parse_cfg_val_u16(val, label, true)?;
+                        }
+                    }
+                    "linux-touchpad-activation-window-ms" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            cfg.linux_opts.linux_touchpad_activation_window_ms =
+                                parse_cfg_val_u16(val, label, true)?;
+                        }
+                    }
+                    "linux-touchpad-activation-ratio" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            let ratio = parse_cfg_val_u16(val, label, false)?;
+                            if ratio > 100 {
+                                bail_expr!(val, "linux-touchpad-activation-ratio must be 0-100");
+                            }
+                            cfg.linux_opts.linux_touchpad_activation_ratio = ratio;
                         }
                     }
                     "windows-altgr" => {

@@ -49,9 +49,13 @@ impl Kanata {
                     );
                 }
             };
-            let tp_threshold = k.touchpad_min_displacement_since_last_poll;
-            let tp_activation_time = k.touchpad_activation_time;
-            let mut touchpad_in = match crate::oskbd::TouchpadIn::new(tp_dev, tp_threshold, tp_activation_time) {
+            let tp_cfg = crate::oskbd::TouchpadConfig {
+                poll_interval_ms: k.touchpad_poll_interval_ms,
+                motion_threshold: k.touchpad_motion_threshold,
+                activation_window_ms: k.touchpad_activation_window_ms,
+                activation_ratio: k.touchpad_activation_ratio,
+            };
+            let mut touchpad_in = match crate::oskbd::TouchpadIn::new(tp_dev, tp_cfg) {
                 Ok(tp) => tp,
                 Err(e) => {
                     bail!("failed to open touchpad device: {e}");
