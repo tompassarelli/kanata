@@ -66,7 +66,7 @@ impl Default for CfgLinuxOptions {
             linux_touchpad_dev: None,
             linux_touchpad_virtual_key: None,
             linux_touchpad_poll_interval_ms: 5,
-            linux_touchpad_motion_threshold: 50,
+            linux_touchpad_motion_threshold: 5,
             linux_touchpad_activation_window_ms: 200,
             linux_touchpad_activation_ratio: 90,
         }
