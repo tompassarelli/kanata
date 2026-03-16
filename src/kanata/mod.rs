@@ -262,6 +262,12 @@ pub struct Kanata {
     /// Determines what types of devices to grab based on autodetection mode.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub device_detect_mode: DeviceDetectMode,
+    /// Path to a touchpad device to monitor for contact state.
+    #[cfg(target_os = "linux")]
+    pub touchpad_dev_path: Option<String>,
+    /// Name of the virtual key to press/release on touchpad contact.
+    #[cfg(target_os = "linux")]
+    pub touchpad_virtual_key: Option<String>,
     /// Fake key actions that are waiting for a certain duration of kanata idling.
     pub waiting_for_idle: HashSet<FakeKeyOnIdle>,
     /// Fake key actions that are waiting for a certain duration of physical keyboard idling,
@@ -522,6 +528,10 @@ impl Kanata {
                 .linux_opts
                 .linux_device_detect_mode
                 .expect("parser should default to some"),
+            #[cfg(target_os = "linux")]
+            touchpad_dev_path: cfg.options.linux_opts.linux_touchpad_dev.clone(),
+            #[cfg(target_os = "linux")]
+            touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),
@@ -672,6 +682,10 @@ impl Kanata {
                 .linux_opts
                 .linux_device_detect_mode
                 .expect("parser should default to some"),
+            #[cfg(target_os = "linux")]
+            touchpad_dev_path: cfg.options.linux_opts.linux_touchpad_dev.clone(),
+            #[cfg(target_os = "linux")]
+            touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),

@@ -837,3 +837,86 @@ impl Drop for Symlink {
         log::info!("Deleted symlink {:#?}", self.dest);
     }
 }
+
+/// Monitors a touchpad device for finger contact state via BTN_TOOL_FINGER.
+/// The device is opened without grabbing so normal touchpad behavior is preserved.
+pub struct TouchpadIn {
+    device: Device,
+    poll: Poll,
+    events: Events,
+    /// Current contact state: true if a finger is on the pad.
+    pub is_touching: bool,
+}
+
+const TOUCHPAD_TOKEN: Token = Token(0);
+
+impl TouchpadIn {
+    pub fn new(dev_path: &str) -> Result<Self, io::Error> {
+        let device = Device::open(dev_path).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("failed to open touchpad device '{dev_path}': {e}"),
+            )
+        })?;
+
+        log::info!(
+            "opened touchpad device (ungrabbed): {dev_path}: {:?}",
+            device.name().unwrap_or("")
+        );
+
+        let poll = Poll::new()?;
+        poll.registry().register(
+            &mut SourceFd(&device.as_raw_fd()),
+            TOUCHPAD_TOKEN,
+            Interest::READABLE,
+        )?;
+
+        Ok(Self {
+            device,
+            poll,
+            events: Events::with_capacity(4),
+            is_touching: false,
+        })
+    }
+
+    /// Block until touchpad events arrive, then process them.
+    /// Returns Some(true) on touch-down transition,
+    /// Some(false) on touch-up transition, or None if no state change.
+    pub fn read_contact_change(&mut self) -> Result<Option<bool>, io::Error> {
+        if let Err(e) = self.poll.poll(&mut self.events, None) {
+            log::error!("touchpad poll error: {e:?}");
+            return Ok(None);
+        }
+
+        if self.events.is_empty() {
+            return Ok(None);
+        }
+
+        let evs: Vec<_> = match self.device.fetch_events() {
+            Ok(evs) => evs.collect(),
+            Err(e) => {
+                if e.raw_os_error() == Some(19) {
+                    log::warn!("touchpad device disconnected");
+                    if self.is_touching {
+                        self.is_touching = false;
+                        return Ok(Some(false));
+                    }
+                }
+                return Err(e);
+            }
+        };
+
+        let mut changed = None;
+        for ev in evs {
+            // BTN_TOOL_FINGER is KeyCode(0x145 = 325)
+            if ev.event_type() == EventType::KEY && ev.code() == KeyCode::BTN_TOOL_FINGER.0 {
+                let touching = ev.value() != 0;
+                if touching != self.is_touching {
+                    self.is_touching = touching;
+                    changed = Some(touching);
+                }
+            }
+        }
+        Ok(changed)
+    }
+}

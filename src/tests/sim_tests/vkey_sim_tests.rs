@@ -241,3 +241,72 @@ fn on_idle_must_be_single_threaded() {
     .to_ascii();
     assert_eq!("t:137ms dn:LGui t:1ms up:LGui", result);
 }
+
+// =============================================================================
+// Touchpad virtual key config parsing tests
+// =============================================================================
+
+#[test]
+fn touchpad_config_both_options_parses() {
+    // Config with both touchpad options should parse successfully.
+    const CFG: &str = r#"
+        (defcfg
+            linux-touchpad-dev "/dev/input/event99"
+            linux-touchpad-virtual-key pad-touch
+        )
+        (defsrc a)
+        (defvirtualkeys pad-touch (layer-while-held pad-layer))
+        (deflayer base a)
+        (deflayer pad-layer b)
+    "#;
+    let k = Kanata::new_from_str(CFG, Default::default()).expect("config should parse");
+    assert!(k.touchpad_dev_path.is_some());
+    assert_eq!(k.touchpad_dev_path.as_deref(), Some("/dev/input/event99"));
+    assert_eq!(
+        k.touchpad_virtual_key.as_deref(),
+        Some("pad-touch")
+    );
+    // Verify the virtual key name resolves
+    assert!(k.virtual_keys.contains_key("pad-touch"));
+}
+
+#[test]
+fn touchpad_config_neither_option_parses() {
+    // Config with neither touchpad option should parse fine.
+    const CFG: &str = r"
+        (defsrc a)
+        (deflayer base a)
+    ";
+    let k = Kanata::new_from_str(CFG, Default::default()).expect("config should parse");
+    assert!(k.touchpad_dev_path.is_none());
+    assert!(k.touchpad_virtual_key.is_none());
+}
+
+#[test]
+fn touchpad_config_only_dev_fails() {
+    // Config with only linux-touchpad-dev should fail.
+    const CFG: &str = r#"
+        (defcfg
+            linux-touchpad-dev "/dev/input/event99"
+        )
+        (defsrc a)
+        (deflayer base a)
+    "#;
+    let result = Kanata::new_from_str(CFG, Default::default());
+    assert!(result.is_err());
+}
+
+#[test]
+fn touchpad_config_only_vk_fails() {
+    // Config with only linux-touchpad-virtual-key should fail.
+    const CFG: &str = r#"
+        (defcfg
+            linux-touchpad-virtual-key pad-touch
+        )
+        (defsrc a)
+        (defvirtualkeys pad-touch lmet)
+        (deflayer base a)
+    "#;
+    let result = Kanata::new_from_str(CFG, Default::default());
+    assert!(result.is_err());
+}

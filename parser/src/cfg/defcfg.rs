@@ -35,6 +35,8 @@ pub struct CfgLinuxOptions {
     pub linux_output_name: String,
     pub linux_output_bus_type: LinuxCfgOutputBusType,
     pub linux_device_detect_mode: Option<DeviceDetectMode>,
+    pub linux_touchpad_dev: Option<String>,
+    pub linux_touchpad_virtual_key: Option<String>,
 }
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
 impl Default for CfgLinuxOptions {
@@ -53,6 +55,8 @@ impl Default for CfgLinuxOptions {
             linux_output_name: "kanata".to_owned(),
             linux_output_bus_type: LinuxCfgOutputBusType::BusI8042,
             linux_device_detect_mode: None,
+            linux_touchpad_dev: None,
+            linux_touchpad_virtual_key: None,
         }
     }
 }
@@ -242,6 +246,16 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                     log::warn!(
                         "The item process-unmapped-keys is not defined in defcfg. Consider whether process-unmapped-keys should be yes vs. no."
                     );
+                }
+                #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                {
+                    let has_dev = cfg.linux_opts.linux_touchpad_dev.is_some();
+                    let has_vk = cfg.linux_opts.linux_touchpad_virtual_key.is_some();
+                    if has_dev != has_vk {
+                        bail!(
+                            "linux-touchpad-dev and linux-touchpad-virtual-key must both be set or both be omitted"
+                        );
+                    }
                 }
                 return Ok(cfg);
             }
@@ -460,6 +474,26 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                                 _ => unreachable!("validated earlier"),
                             });
                             cfg.linux_opts.linux_device_detect_mode = detect_mode;
+                        }
+                    }
+                    "linux-touchpad-dev" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            let dev = sexpr_to_str_or_err(val, label)?;
+                            if dev.is_empty() {
+                                bail_expr!(val, "linux-touchpad-dev cannot be empty");
+                            }
+                            cfg.linux_opts.linux_touchpad_dev = Some(dev.to_string());
+                        }
+                    }
+                    "linux-touchpad-virtual-key" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            let vk_name = sexpr_to_str_or_err(val, label)?;
+                            if vk_name.is_empty() {
+                                bail_expr!(val, "linux-touchpad-virtual-key cannot be empty");
+                            }
+                            cfg.linux_opts.linux_touchpad_virtual_key = Some(vk_name.to_string());
                         }
                     }
                     "windows-altgr" => {

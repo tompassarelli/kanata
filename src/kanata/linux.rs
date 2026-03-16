@@ -35,6 +35,35 @@ impl Kanata {
             }
         };
 
+        // Start touchpad monitoring thread if configured.
+        if let Some(ref tp_dev) = k.touchpad_dev_path {
+            let tp_vk_name = k
+                .touchpad_virtual_key
+                .clone()
+                .expect("parser validates both touchpad options are set together");
+            let tp_vk_index = match k.virtual_keys.get(&tp_vk_name) {
+                Some(&idx) => idx as u16,
+                None => {
+                    bail!(
+                        "linux-touchpad-virtual-key '{tp_vk_name}' not found in defvirtualkeys"
+                    );
+                }
+            };
+            let mut touchpad_in = match crate::oskbd::TouchpadIn::new(tp_dev) {
+                Ok(tp) => tp,
+                Err(e) => {
+                    bail!("failed to open touchpad device: {e}");
+                }
+            };
+            let kanata_clone = kanata.clone();
+            std::thread::Builder::new()
+                .name("touchpad-monitor".into())
+                .spawn(move || {
+                    touchpad_monitor_loop(kanata_clone, &mut touchpad_in, tp_vk_index);
+                })
+                .expect("failed to spawn touchpad monitor thread");
+        }
+
         // In some environments, this needs to be done after the input device grab otherwise it
         // does not work on kanata startup.
         Kanata::set_repeat_rate(k.x11_repeat_rate)?;
@@ -213,4 +242,65 @@ fn handle_scroll(
         }
         _ => unreachable!("expect to be handling a wheel event"),
     }
+}
+
+/// Runs in a dedicated thread. Blocks on the touchpad fd for contact state changes
+/// and injects virtual key press/release into the kanata layout.
+///
+/// A separate thread is used rather than registering the touchpad fd in the existing
+/// KbdIn mio::Poll because:
+/// - KbdIn::read() returns Vec<InputEvent> and expects keyboard events; touchpad
+///   events need fundamentally different processing (BTN_TOOL_FINGER, not key codes).
+/// - The TCP server already establishes the pattern of locking the Kanata mutex and
+///   calling handle_fakekey_action from a separate thread.
+/// - Mixing the touchpad fd into KbdIn would require restructuring the read loop and
+///   its return type, for minimal benefit over a dedicated blocking thread.
+fn touchpad_monitor_loop(
+    kanata: Arc<Mutex<Kanata>>,
+    touchpad_in: &mut crate::oskbd::TouchpadIn,
+    vk_index: u16,
+) {
+    use kanata_parser::cfg::FAKE_KEY_ROW;
+    info!("touchpad monitor thread started");
+    loop {
+        match touchpad_in.read_contact_change() {
+            Ok(Some(true)) => {
+                log::debug!("touchpad: finger down, pressing virtual key");
+                let mut k = kanata.lock();
+                handle_fakekey_action(
+                    FakeKeyAction::Press,
+                    k.layout.bm(),
+                    FAKE_KEY_ROW,
+                    vk_index,
+                );
+            }
+            Ok(Some(false)) => {
+                log::debug!("touchpad: finger up, releasing virtual key");
+                let mut k = kanata.lock();
+                handle_fakekey_action(
+                    FakeKeyAction::Release,
+                    k.layout.bm(),
+                    FAKE_KEY_ROW,
+                    vk_index,
+                );
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::error!("touchpad monitor error: {e}");
+                break;
+            }
+        }
+    }
+    // Guarantee release if the thread exits while the touchpad was active.
+    if touchpad_in.is_touching {
+        log::warn!("touchpad monitor exiting while active, releasing virtual key");
+        let mut k = kanata.lock();
+        handle_fakekey_action(
+            FakeKeyAction::Release,
+            k.layout.bm(),
+            FAKE_KEY_ROW,
+            vk_index,
+        );
+    }
+    log::warn!("touchpad monitor thread exiting");
 }
