@@ -268,6 +268,12 @@ pub struct Kanata {
     /// Name of the virtual key to press/release on touchpad contact.
     #[cfg(target_os = "linux")]
     pub touchpad_virtual_key: Option<String>,
+    /// Motion threshold (in abs units) before touchpad activates.
+    #[cfg(target_os = "linux")]
+    pub touchpad_threshold: u16,
+    /// Milliseconds of sustained motion required before activation (0 = instant).
+    #[cfg(target_os = "linux")]
+    pub touchpad_activation_time: u16,
     /// Fake key actions that are waiting for a certain duration of kanata idling.
     pub waiting_for_idle: HashSet<FakeKeyOnIdle>,
     /// Fake key actions that are waiting for a certain duration of physical keyboard idling,
@@ -532,6 +538,10 @@ impl Kanata {
             touchpad_dev_path: cfg.options.linux_opts.linux_touchpad_dev.clone(),
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
+            #[cfg(target_os = "linux")]
+            touchpad_threshold: cfg.options.linux_opts.linux_touchpad_threshold,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),
@@ -686,6 +696,10 @@ impl Kanata {
             touchpad_dev_path: cfg.options.linux_opts.linux_touchpad_dev.clone(),
             #[cfg(target_os = "linux")]
             touchpad_virtual_key: cfg.options.linux_opts.linux_touchpad_virtual_key.clone(),
+            #[cfg(target_os = "linux")]
+            touchpad_threshold: cfg.options.linux_opts.linux_touchpad_threshold,
+            #[cfg(target_os = "linux")]
+            touchpad_activation_time: cfg.options.linux_opts.linux_touchpad_activation_time,
             waiting_for_idle: HashSet::default(),
             waiting_for_physical_idle: HashSet::default(),
             vkeys_pending_release: HashMap::default(),

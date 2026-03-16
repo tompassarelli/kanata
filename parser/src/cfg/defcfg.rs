@@ -37,6 +37,8 @@ pub struct CfgLinuxOptions {
     pub linux_device_detect_mode: Option<DeviceDetectMode>,
     pub linux_touchpad_dev: Option<String>,
     pub linux_touchpad_virtual_key: Option<String>,
+    pub linux_touchpad_threshold: u16,
+    pub linux_touchpad_activation_time: u16,
 }
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "unknown"))]
 impl Default for CfgLinuxOptions {
@@ -57,6 +59,8 @@ impl Default for CfgLinuxOptions {
             linux_device_detect_mode: None,
             linux_touchpad_dev: None,
             linux_touchpad_virtual_key: None,
+            linux_touchpad_threshold: 50,
+            linux_touchpad_activation_time: 0,
         }
     }
 }
@@ -494,6 +498,20 @@ pub fn parse_defcfg(expr: &[SExpr]) -> Result<CfgOptions> {
                                 bail_expr!(val, "linux-touchpad-virtual-key cannot be empty");
                             }
                             cfg.linux_opts.linux_touchpad_virtual_key = Some(vk_name.to_string());
+                        }
+                    }
+                    "linux-touchpad-threshold" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            cfg.linux_opts.linux_touchpad_threshold =
+                                parse_cfg_val_u16(val, label, true)?;
+                        }
+                    }
+                    "linux-touchpad-activation-time" => {
+                        #[cfg(any(target_os = "linux", target_os = "unknown"))]
+                        {
+                            cfg.linux_opts.linux_touchpad_activation_time =
+                                parse_cfg_val_u16(val, label, false)?;
                         }
                     }
                     "windows-altgr" => {
