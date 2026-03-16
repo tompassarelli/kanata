@@ -992,14 +992,14 @@ impl TouchpadIn {
                     if ev.value() != 0 {
                         self.finger_down = true;
                         self.reset();
-                        log::trace!("touchpad: finger down");
+                        log::info!("touchpad: finger down");
                     } else {
                         self.finger_down = false;
                         self.reset();
                         if self.is_active {
                             self.is_active = false;
                             changed = Some(false);
-                            log::trace!("touchpad: finger up, deactivating");
+                            log::info!("touchpad: finger up, deactivating");
                         }
                     }
                 }
@@ -1045,7 +1045,7 @@ impl TouchpadIn {
 
             self.samples.push_back((now, is_motion));
 
-            log::trace!(
+            log::info!(
                 "touchpad: sample={} total_samples={}",
                 is_motion, self.samples.len(),
             );
@@ -1053,7 +1053,7 @@ impl TouchpadIn {
             if self.check_activation(now) {
                 self.is_active = true;
                 changed = Some(true);
-                log::trace!("touchpad: activation ratio met, activating");
+                log::info!("touchpad: activation ratio met, activating");
             }
         }
 
