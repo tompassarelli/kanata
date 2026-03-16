@@ -842,21 +842,31 @@ impl Drop for Symlink {
 /// The device is opened without grabbing so normal touchpad behavior is preserved.
 ///
 /// Detection algorithm (mirrors the standalone touch-layer project):
-///   1. BTN_TOOL_FINGER value=1 → finger is on pad, but do NOT activate yet
-///   2. ABS_X/ABS_Y change while finger is down → activate (real motion detected)
+///   1. BTN_TOOL_FINGER value=1 → finger is on pad, record initial position
+///   2. ABS_X/ABS_Y moves beyond a threshold from initial position → activate
 ///   3. BTN_TOOL_FINGER value=0 → deactivate
 ///
 /// This avoids false activations from resting fingers or accidental brushes.
+/// Raw ABS events fire on first contact (reporting position), so we require
+/// actual displacement from the landing point before activating.
 pub struct TouchpadIn {
     device: Device,
     poll: Poll,
     events: Events,
     /// True when finger is physically on the pad (BTN_TOOL_FINGER).
     finger_down: bool,
-    /// True when we've detected motion and activated the virtual key.
-    /// This is the externally visible "active" state.
+    /// True when we've detected sufficient motion and activated the virtual key.
     pub is_active: bool,
+    /// Initial finger position when BTN_TOOL_FINGER fires.
+    /// None until the first ABS_X/ABS_Y event after finger-down.
+    anchor: Option<(i32, i32)>,
 }
+
+/// Minimum displacement (in abs units) from landing position before activating.
+/// Touchpad abs ranges are typically ~1000-4000+, so a threshold of 50 filters
+/// out sensor noise and small jitter from resting fingers while still being
+/// responsive to intentional movement.
+const MOTION_THRESHOLD: i32 = 50;
 
 const TOUCHPAD_TOKEN: Token = Token(0);
 
@@ -887,6 +897,7 @@ impl TouchpadIn {
             events: Events::with_capacity(4),
             finger_down: false,
             is_active: false,
+            anchor: None,
         })
     }
 
@@ -911,6 +922,7 @@ impl TouchpadIn {
                     if self.is_active {
                         self.is_active = false;
                         self.finger_down = false;
+                        self.anchor = None;
                         return Ok(Some(false));
                     }
                 }
@@ -920,17 +932,24 @@ impl TouchpadIn {
 
         use evdev::AbsoluteAxisCode;
 
+        // Track latest x/y from this batch of events so we can update anchor
+        // and check displacement.
+        let mut cur_x: Option<i32> = None;
+        let mut cur_y: Option<i32> = None;
         let mut changed = None;
-        for ev in evs {
+
+        for ev in &evs {
             match ev.event_type() {
                 EventType::KEY if ev.code() == KeyCode::BTN_TOOL_FINGER.0 => {
                     if ev.value() != 0 {
-                        // Finger touched pad — just record it, don't activate yet.
+                        // Finger touched pad — reset state, wait for position events.
                         self.finger_down = true;
+                        self.anchor = None;
                         log::trace!("touchpad: finger down (waiting for motion)");
                     } else {
                         // Finger lifted — deactivate if we were active.
                         self.finger_down = false;
+                        self.anchor = None;
                         if self.is_active {
                             self.is_active = false;
                             changed = Some(false);
@@ -938,25 +957,45 @@ impl TouchpadIn {
                         }
                     }
                 }
-                EventType::ABSOLUTE
-                    if self.finger_down
-                        && !self.is_active
-                        && matches!(
-                            AbsoluteAxisCode(ev.code()),
-                            AbsoluteAxisCode::ABS_X
-                                | AbsoluteAxisCode::ABS_Y
-                                | AbsoluteAxisCode::ABS_MT_POSITION_X
-                                | AbsoluteAxisCode::ABS_MT_POSITION_Y
-                        ) =>
-                {
-                    // Motion detected while finger is down — activate.
-                    self.is_active = true;
-                    changed = Some(true);
-                    log::trace!("touchpad: motion detected, activating");
+                EventType::ABSOLUTE if self.finger_down => {
+                    match AbsoluteAxisCode(ev.code()) {
+                        AbsoluteAxisCode::ABS_X | AbsoluteAxisCode::ABS_MT_POSITION_X => {
+                            cur_x = Some(ev.value());
+                        }
+                        AbsoluteAxisCode::ABS_Y | AbsoluteAxisCode::ABS_MT_POSITION_Y => {
+                            cur_y = Some(ev.value());
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
         }
+
+        // Process position updates after all events in the batch.
+        if self.finger_down && !self.is_active && (cur_x.is_some() || cur_y.is_some()) {
+            match self.anchor {
+                None => {
+                    // First position report after finger-down — set anchor.
+                    // Use current values, falling back to 0 for any axis not yet reported.
+                    self.anchor = Some((cur_x.unwrap_or(0), cur_y.unwrap_or(0)));
+                    log::trace!("touchpad: anchor set at {:?}", self.anchor);
+                }
+                Some((ax, ay)) => {
+                    // Check displacement from anchor.
+                    let dx = cur_x.map_or(0, |x| (x - ax).abs());
+                    let dy = cur_y.map_or(0, |y| (y - ay).abs());
+                    if dx > MOTION_THRESHOLD || dy > MOTION_THRESHOLD {
+                        self.is_active = true;
+                        changed = Some(true);
+                        log::trace!(
+                            "touchpad: motion detected (dx={dx}, dy={dy}), activating"
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(changed)
     }
 }
